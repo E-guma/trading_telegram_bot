@@ -18,7 +18,7 @@ HORIZON = 15  # minutes (1-minute candles)
 
 
 # ---------------------------------------------------------------- data feed
-async def fetch_candles(count: int = 5000, granularity: int = 60) -> pd.DataFrame:
+async def fetch_candles(count: int = 2000, granularity: int = 60) -> pd.DataFrame:
     req = {
         "ticks_history": SYMBOL,
         "adjust_start_time": 1,
@@ -28,7 +28,8 @@ async def fetch_candles(count: int = 5000, granularity: int = 60) -> pd.DataFram
         "granularity": granularity,
     }
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Origin": "https://deriv.com"
     }
     
     async with websockets.connect(WS_URL, additional_headers=headers) as ws:
