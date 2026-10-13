@@ -31,7 +31,7 @@ async def fetch_candles(count: int = 5000, granularity: int = 60) -> pd.DataFram
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
-    async with websockets.connect(WS_URL, extra_headers=headers) as ws:
+    async with websockets.connect(WS_URL, additional_headers=headers) as ws:
         await ws.send(json.dumps(req))
         resp = json.loads(await ws.recv())
     if "error" in resp:
