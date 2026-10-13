@@ -5,5 +5,3 @@ pandas_ta>=0.4.71b0
 numpy>=1.26
 scikit-learn>=1.4
 python-dotenv>=1.0
-flask
-
