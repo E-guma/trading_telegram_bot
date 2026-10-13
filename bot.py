@@ -3,8 +3,6 @@ import logging
 import os
 import time
 
-from flask import Flask
-from threading import Thread
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -112,31 +110,31 @@ async def unsubscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Unsubscribed." if jobs else "No active subscription.")
 
 
-web_app = Flask(__name__)
-
-@web_app.route('/')
-def home():
-    return "Bot is awake and running!"
-
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    web_app.run(host="0.0.0.0", port=port)
-
-def keep_alive():
-    t = Thread(target=run_web)
-    t.start()
-    
 def main():
-    keep_alive()
     token = os.environ["TELEGRAM_BOT_TOKEN"]
+    
+    # EXACT RENDER URL (Update this if your app name is different)
+    render_url = "https://fx-derivbot.onrender.com"
+    
     app = Application.builder().token(token).build()
+    
     for name, fn in [
         ("start", start), ("analyze", analyze), ("trend", trend), ("backtest", backtest),
         ("risk", risk), ("subscribe", subscribe), ("unsubscribe", unsubscribe),
     ]:
         app.add_handler(CommandHandler(name, fn))
-    app.run_polling()
-
+        
+    # Get the dynamic port assigned by Render (defaults to 10000)
+    port = int(os.environ.get("PORT", 10000))
+    
+    # Run the native webhook server instead of polling
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path="webhook",
+        webhook_url=f"{render_url}/webhook"
+    )
 
 if __name__ == "__main__":
     main()
+    
