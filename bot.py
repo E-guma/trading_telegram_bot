@@ -3,13 +3,11 @@ import logging
 import os
 import time
 
-from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 import analysis
 
-load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 _cache = {"t": 0.0, "df": None}
