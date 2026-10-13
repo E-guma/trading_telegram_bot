@@ -12,7 +12,7 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089"
+WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
 SYMBOL = "1HZ100V"
 HORIZON = 15  # minutes (1-minute candles)
 
