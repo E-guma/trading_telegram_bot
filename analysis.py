@@ -12,7 +12,7 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
+WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public"
 SYMBOL = "1HZ100V"
 HORIZON = 15  # minutes (1-minute candles)
 
@@ -27,12 +27,8 @@ async def fetch_candles(count: int = 2000, granularity: int = 60) -> pd.DataFram
         "style": "candles",
         "granularity": granularity,
     }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Origin": "https://deriv.com"
-    }
     
-    async with websockets.connect(WS_URL, additional_headers=headers) as ws:
+    async with websockets.connect(WS_URL) as ws:
         await ws.send(json.dumps(req))
         resp = json.loads(await ws.recv())
     if "error" in resp:
