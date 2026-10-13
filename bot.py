@@ -3,6 +3,8 @@ import logging
 import os
 import time
 
+from flask import Flask
+from threading import Thread
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -110,7 +112,22 @@ async def unsubscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Unsubscribed." if jobs else "No active subscription.")
 
 
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Bot is awake and running!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=port)
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.start()
+    
 def main():
+    keep_alive()
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).build()
     for name, fn in [
