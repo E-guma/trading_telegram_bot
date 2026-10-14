@@ -3,15 +3,16 @@ import logging
 import os
 import time
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from dotenv import load_dotenv
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 import analysis
 
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 _cache = {"t": 0.0, "df": None}
-
 
 async def get_candles():
     if _cache["df"] is None or time.time() - _cache["t"] > 60:
@@ -19,113 +20,158 @@ async def get_candles():
         _cache["t"] = time.time()
     return _cache["df"]
 
+# --- UI Keyboards ---
+def get_main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Analyze 15m", callback_data="analyze"),
+         InlineKeyboardButton("📈 Trend & Backtest", callback_data="trend")],
+        [InlineKeyboardButton("🧪 Run Walk-Forward", callback_data="backtest")]
+    ])
 
+def get_refresh_button(action_type: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Refresh Data", callback_data=action_type)]
+    ])
+
+# --- Initialization ---
+async def post_init(app: Application):
+    """Initializes the blue menu button next to the chat bar."""
+    await app.bot.set_my_commands([
+        ("start", "Open the main control panel"),
+        ("analyze", "Get current 15-min outlook & indicators"),
+        ("trend", "Analyze with historical accuracy overlay"),
+        ("backtest", "Run rigorous walk-forward test"),
+        ("risk", "Calculate position sizing"),
+        ("subscribe", "Get automated reports every 15 min"),
+        ("unsubscribe", "Stop automated reports")
+    ])
+
+# --- Handlers ---
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "V100 (1s) analysis bot\n\n"
-        "/analyze - indicators + 15-min model lean\n"
-        "/trend - same as /analyze, with out-of-sample accuracy\n"
-        "/backtest - walk-forward accuracy only\n"
-        "/risk <balance> <risk%> <stop_distance> - position sizing\n"
-        "/subscribe - report every 15 min\n"
-        "/unsubscribe\n\n"
-        "Expect ~50% accuracy: the index is RNG-generated. Not financial advice."
+        "<b>V100 (1s) Trading Terminal</b>\n\n"
+        "Select an action below or use the menu to navigate.\n"
+        "<i>Expect ~50% baseline accuracy: the index is RNG-generated. Not financial advice.</i>",
+        parse_mode="HTML",
+        reply_markup=get_main_menu()
     )
 
+async def handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Routes button clicks to the appropriate logic."""
+    query = update.callback_query
+    await query.answer()  # Stops the button from flashing
+    
+    # Send typing indicator
+    await ctx.bot.send_chat_action(chat_id=query.message.chat_id, action=constants.ChatAction.TYPING)
+    
+    if query.data == "analyze":
+        await _run_analyze(query.message)
+    elif query.data == "trend":
+        await _run_trend(query.message)
+    elif query.data == "backtest":
+        await _run_backtest(query.message)
 
-async def analyze(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("Fetching data...")
+# --- Core Logic Functions ---
+async def _run_analyze(message):
+    msg = await message.reply_text("Fetching live data...")
     try:
         df = await get_candles()
         a = await asyncio.to_thread(analysis.analyse, df)
-        await msg.edit_text(analysis.format_report(a))
+        await msg.edit_text(analysis.format_report(a), parse_mode="HTML", reply_markup=get_refresh_button("analyze"))
     except Exception as e:
         await msg.edit_text(f"Error: {e}")
 
+async def analyze(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+    await _run_analyze(update.message)
 
-async def trend(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("Fetching data and backtesting...")
+async def _run_trend(message):
+    msg = await message.reply_text("Fetching data and backtesting...")
     try:
         df = await get_candles()
         a = await asyncio.to_thread(analysis.analyse, df)
         bt = await asyncio.to_thread(analysis.walk_forward, df)
-        await msg.edit_text(analysis.format_report(a, bt))
+        await msg.edit_text(analysis.format_report(a, bt), parse_mode="HTML", reply_markup=get_refresh_button("trend"))
     except Exception as e:
         await msg.edit_text(f"Error: {e}")
 
+async def trend(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+    await _run_trend(update.message)
 
-async def backtest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("Running walk-forward test...")
+async def _run_backtest(message):
+    msg = await message.reply_text("Running walk-forward test...")
     try:
         df = await get_candles()
         bt = await asyncio.to_thread(analysis.walk_forward, df)
         folds = ", ".join(f"{x:.1%}" for x in bt["folds"])
-        await msg.edit_text(
-            f"Walk-forward ({len(bt['folds'])} folds, n={bt['n_test']})\n"
-            f"Accuracy: {bt['accuracy']:.1%} ± {bt['ci']:.1%}\n"
+        text = (
+            f"<b>Walk-forward ({len(bt['folds'])} folds, n={bt['n_test']})</b>\n"
+            f"Accuracy: <code>{bt['accuracy']:.1%} ± {bt['ci']:.1%}</code>\n"
             f"Majority-class baseline: {bt['baseline']:.1%}\n"
             f"Per fold: {folds}"
         )
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=get_refresh_button("backtest"))
     except Exception as e:
         await msg.edit_text(f"Error: {e}")
 
+async def backtest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+    await _run_backtest(update.message)
 
 async def risk(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         balance, pct, stop = (float(x) for x in ctx.args[:3])
         amount = balance * pct / 100
         await update.message.reply_text(
-            f"Risk amount: {amount:.2f}\n"
-            f"Stake per point of stop: {amount / stop:.4f}\n"
-            "(Check your broker's contract specs; payout per point varies.)"
+            f"<b>Risk Profile</b>\n"
+            f"Risk amount: <code>${amount:.2f}</code>\n"
+            f"Stake per point of stop: <code>${amount / stop:.4f}</code>\n\n"
+            "<i>(Check your broker's contract specs; payout per point varies.)</i>",
+            parse_mode="HTML"
         )
     except (ValueError, ZeroDivisionError):
-        await update.message.reply_text("Usage: /risk 1000 1 25  (balance, risk %, stop distance in points)")
-
+        await update.message.reply_text("Usage: <code>/risk 1000 1 25</code> (balance, risk %, stop distance in points)", parse_mode="HTML")
 
 async def _push(ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = ctx.job.chat_id
     try:
         df = await analysis.fetch_candles()
         a = await asyncio.to_thread(analysis.analyse, df)
-        await ctx.bot.send_message(chat_id, analysis.format_report(a))
+        await ctx.bot.send_message(chat_id, analysis.format_report(a), parse_mode="HTML")
     except Exception as e:
         await ctx.bot.send_message(chat_id, f"Scheduled update failed: {e}")
-
 
 async def subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     for j in ctx.job_queue.get_jobs_by_name(str(chat_id)):
         j.schedule_removal()
     ctx.job_queue.run_repeating(_push, interval=900, first=5, chat_id=chat_id, name=str(chat_id))
-    await update.message.reply_text("Subscribed: report every 15 minutes. /unsubscribe to stop.")
-
+    await update.message.reply_text("✅ Subscribed: Report scheduled every 15 minutes. Use /unsubscribe to stop.")
 
 async def unsubscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     jobs = ctx.job_queue.get_jobs_by_name(str(update.effective_chat.id))
     for j in jobs:
         j.schedule_removal()
-    await update.message.reply_text("Unsubscribed." if jobs else "No active subscription.")
-
+    await update.message.reply_text("🛑 Unsubscribed." if jobs else "No active subscription found.")
 
 def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    
-    # EXACT RENDER URL (Update this if your app name is different)
     render_url = "https://fx-derivbot.onrender.com"
     
-    app = Application.builder().token(token).build()
+    # Initialize Application with the post_init hook
+    app = Application.builder().token(token).post_init(post_init).build()
     
     for name, fn in [
         ("start", start), ("analyze", analyze), ("trend", trend), ("backtest", backtest),
         ("risk", risk), ("subscribe", subscribe), ("unsubscribe", unsubscribe),
     ]:
         app.add_handler(CommandHandler(name, fn))
-        
-    # Get the dynamic port assigned by Render (defaults to 10000)
-    port = int(os.environ.get("PORT", 10000))
     
-    # Run the native webhook server instead of polling
+    # Catch button clicks
+    app.add_handler(CallbackQueryHandler(handle_button))
+        
+    port = int(os.environ.get("PORT", 10000))
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
@@ -135,4 +181,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
