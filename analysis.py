@@ -20,37 +20,23 @@ HORIZON = 2
 
 # ---------------------------------------------------------------- data feed
 async def fetch_candles(count: int = 2000, granularity: int = 900) -> pd.DataFrame:
-    all_candles = []
-    current_end = "latest"
+    req = {
+        "ticks_history": SYMBOL,
+        "adjust_start_time": 1,
+        "count": count,
+        "end": "latest",
+        "style": "candles",
+        "granularity": granularity,
+    }
     
     async with websockets.connect(WS_URL) as ws:
-        while len(all_candles) < count:
-            batch_size = min(1000, count - len(all_candles))
-            req = {
-                "ticks_history": SYMBOL,
-                "adjust_start_time": 1,
-                "count": batch_size,
-                "end": current_end,
-                "style": "candles",
-                "granularity": granularity,
-            }
-            
-            await ws.send(json.dumps(req))
-            resp = json.loads(await ws.recv())
-            
-            if "error" in resp:
-                raise RuntimeError(resp["error"]["message"])
-            
-            batch = resp.get("candles", [])
-            if not batch:
-                break
-                
-            all_candles.extend(batch)
-            current_end = batch[0]["epoch"] - 1
-            await asyncio.sleep(0.1)
-
-    df = pd.DataFrame(all_candles)
-    df = df.drop_duplicates(subset=['epoch']).sort_values('epoch').reset_index(drop=True)
+        await ws.send(json.dumps(req))
+        resp = json.loads(await ws.recv())
+        
+    if "error" in resp:
+        raise RuntimeError(resp["error"]["message"])
+        
+    df = pd.DataFrame(resp.get("candles", []))
     df["time"] = pd.to_datetime(df["epoch"], unit="s")
     df = df.set_index("time")[["open", "high", "low", "close"]].astype(float)
     
@@ -59,107 +45,89 @@ async def fetch_candles(count: int = 2000, granularity: int = 900) -> pd.DataFra
 
 # ----------------------------------------------------------------- features
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
-    c = df["close"]
-    h = df["high"]
-    l = df["low"]
-    o = df["open"]
+    c, h, l, o = df["close"], df["high"], df["low"], df["open"]
     f = pd.DataFrame(index=df.index)
     
-    # 1. Base returns & momentum indicators
-    for k in (1, 2, 3, 6, 12):
-        f[f"ret{k}"] = c.pct_change(k)
+    # 1. Essential Momentum & Volatility (Trimmed Correlated Noise)
     f["rsi"] = ta.rsi(c, length=14)
-    macd = ta.macd(c, fast=12, slow=26, signal=9)
-    f["macd_hist"] = macd["MACDh_12_26_9"] / c
     f["atr_pct"] = ta.atr(h, l, c, length=14) / c
-    r = c.pct_change()
-    f["vol_ratio"] = ta.stdev(r, length=10) / ta.stdev(r, length=60)
 
-    # 2. Triple EMA System & Gaps
+    # 2. Core Triple EMA System
     ema9 = ta.ema(c, length=9)
     ema26 = ta.ema(c, length=26)
     ema50 = ta.ema(c, length=50)
     f["ema9_26_gap"] = (ema9 - ema26) / c
-    f["ema26_50_gap"] = (ema26 - ema50) / c
 
-    # 3. Geometric Wick Math
+    # 3. Vectorized Geometric Wick Math
     body = (c - o).abs().clip(lower=1e-5)
-    upper_wick = h - np.maximum(o, c)
-    lower_wick = np.minimum(o, c) - l
-    bull_wick = (lower_wick >= (body * 1.8)).astype(int)
-    bear_wick = (upper_wick >= (body * 1.8)).astype(int)
+    bull_wick = ((np.minimum(o, c) - l) >= (body * 1.8)).astype(int)
+    bear_wick = ((h - np.maximum(o, c)) >= (body * 1.8)).astype(int)
 
-    # 4. Proximity Rejection of 26 or 50 EMA
-    tolerance = 0.005
-    bull_rej_26 = ((l <= ema26 * (1 + tolerance)) & (c > ema26) & (bull_wick == 1)).astype(int)
-    bull_rej_50 = ((l <= ema50 * (1 + tolerance)) & (c > ema50) & (bull_wick == 1)).astype(int)
-    bear_rej_26 = ((h >= ema26 * (1 - tolerance)) & (c < ema26) & (bear_wick == 1)).astype(int)
-    bear_rej_50 = ((h >= ema50 * (1 - tolerance)) & (c < ema50) & (bear_wick == 1)).astype(int)
+    # 4. EMA & Static S/R Rejections (Combined for UI Prices)
+    ema_tol, static_tol = 0.005, 0.001
+    rolling_max, rolling_min = h.rolling(70).max(), l.rolling(70).min()
+
+    # Calculate individual rejection triggers for both 26 and 50 EMAs
+    bull_rej_26 = ((l <= ema26 * (1 + ema_tol)) & (c > ema26) & bull_wick).astype(int)
+    bull_rej_50 = ((l <= ema50 * (1 + ema_tol)) & (c > ema50) & bull_wick).astype(int)
+    bear_rej_26 = ((h >= ema26 * (1 - ema_tol)) & (c < ema26) & bear_wick).astype(int)
+    bear_rej_50 = ((h >= ema50 * (1 - ema_tol)) & (c < ema50) & bear_wick).astype(int)
 
     f["bull_ema_rej"] = np.maximum(bull_rej_26, bull_rej_50)
     f["bear_ema_rej"] = np.maximum(bear_rej_26, bear_rej_50)
+    
+    f["bull_static_rej"] = ((l <= rolling_min * (1 + static_tol)) & bull_wick).astype(int)
+    f["bear_static_rej"] = ((h >= rolling_max * (1 - static_tol)) & bear_wick).astype(int)
 
-    # UI Only: Capture exact rejection prices
-    f["bull_rej_price"] = np.where(f["bull_ema_rej"] == 1, l, np.nan)
-    f["bear_rej_price"] = np.where(f["bear_ema_rej"] == 1, h, np.nan)
+    # UI Only: Capture exact rejection prices (Quarantined from ML later)
+    f["bull_rej_price"] = np.where(f["bull_ema_rej"] | f["bull_static_rej"], l, np.nan)
+    f["bear_rej_price"] = np.where(f["bear_ema_rej"] | f["bear_static_rej"], h, np.nan)
+    
     f["recent_bull_rej"] = f["bull_ema_rej"].rolling(window=3).max().fillna(0)
     f["recent_bear_rej"] = f["bear_ema_rej"].rolling(window=3).max().fillna(0)
+    
     f["recent_bull_price"] = f["bull_rej_price"].ffill(limit=2).fillna(0)
     f["recent_bear_price"] = f["bear_rej_price"].ffill(limit=2).fillna(0)
     f = f.drop(columns=["bull_rej_price", "bear_rej_price"])
 
-    # 5. Static Support and Resistance Zones (50-period rolling)
-    rolling_max = h.rolling(70).max()
-    rolling_min = l.rolling(70).min()
-    static_tol = 0.001
-    
-    f["bull_static_rej"] = ((l <= rolling_min * (1 + static_tol)) & (bull_wick == 1)).astype(int)
-    f["bear_static_rej"] = ((h >= rolling_max * (1 - static_tol)) & (bear_wick == 1)).astype(int)
-
-    # 6. Market Regime Categorization (ADX)
+    # 5. Market Regime & Exhaustion
     adx = ta.adx(h, l, c, length=14)
     f["adx"] = adx.iloc[:, 0] if adx is not None else 0
     f["is_ranging"] = (f["adx"] < 20).astype(int)
 
-    # 7. Statistical Exhaustion Metrics (Bollinger Bands)
     bb = ta.bbands(c, length=20, std=2)
     bb_lower = bb.iloc[:, 0] if bb is not None else c
     bb_upper = bb.iloc[:, 2] if bb is not None else c
-    f["bb_width"] = bb.iloc[:, 1] / c if bb is not None else 0
-    
     f["bull_exhaustion"] = (l < bb_lower).astype(int)
     f["bear_exhaustion"] = (h > bb_upper).astype(int)
 
-     # 8. Dynamic Confluence Scoring System
-    # Trending (is_ranging=0): EMA Rejection = +2, Static S/R = +1
-    # Ranging (is_ranging=1): EMA Rejection = +1, Static S/R = +2
+    # 6. Dynamic Confluence Scoring System
     ema_rej_weight = 2 - f["is_ranging"]
     static_rej_weight = 1 + f["is_ranging"]
 
     f["bull_score"] = (
-        (ema9 > ema26).astype(int)
-        + (c > ema50).astype(int)
-        + (f["recent_bull_rej"] * ema_rej_weight)
-        + (f["bull_static_rej"] * static_rej_weight) 
-        + f["bull_exhaustion"]
-        + ((f["rsi"] > 40) & (f["rsi"] < 70)).astype(int)
+        (ema9 > ema26).astype(int) + 
+        (c > ema50).astype(int) + 
+        (f["recent_bull_rej"] * ema_rej_weight) + 
+        (f["bull_static_rej"] * static_rej_weight) + 
+        f["bull_exhaustion"] + 
+        ((f["rsi"] > 40) & (f["rsi"] < 70)).astype(int)
     )
 
     f["bear_score"] = (
-        (ema9 < ema26).astype(int)
-        + (c < ema50).astype(int)
-        + (f["recent_bear_rej"] * ema_rej_weight)
-        + (f["bear_static_rej"] * static_rej_weight)
-        + f["bear_exhaustion"]
-        + ((f["rsi"] < 60) & (f["rsi"] > 30)).astype(int)
+        (ema9 < ema26).astype(int) + 
+        (c < ema50).astype(int) + 
+        (f["recent_bear_rej"] * ema_rej_weight) + 
+        (f["bear_static_rej"] * static_rej_weight) + 
+        f["bear_exhaustion"] + 
+        ((f["rsi"] < 60) & (f["rsi"] > 30)).astype(int)
     )
-
 
     return f
 
 
 def _model():
-    return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, C=0.1))
+    return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, C=1))
 
 
 def _dataset(df: pd.DataFrame):
@@ -250,8 +218,8 @@ def analyse(df: pd.DataFrame) -> dict:
         exhaustion_state = "Normal bounds"
 
     return {
-    	"symbol": SYMBOL,
-   	 "asset_name": "Volatility 100 (1s) Index",
+        "symbol": SYMBOL,
+        "asset_name": "Volatility 100 (1s) Index",
         "price": float(df["close"].iloc[-1]),
         "p_up": p_up,
         "confluence_dir": confluence_dir,
@@ -261,9 +229,7 @@ def analyse(df: pd.DataFrame) -> dict:
         "has_rejection": has_bull_rej or has_bear_rej,
         "rej_price": rej_price,
         "rsi": float(row["rsi"]),
-        "macd_hist": float(row["macd_hist"]),
         "atr": float(row["atr_pct"]) * float(df["close"].iloc[-1]),
-        "vol_regime": "high" if row["vol_ratio"] > 1.3 else "low" if row["vol_ratio"] < 0.7 else "normal",
         "market_regime": regime,
         "adx": adx_val,
         "exhaustion_state": exhaustion_state
@@ -292,8 +258,8 @@ def format_report(a: dict, bt: dict | None = None) -> str:
         f"• Model Lean: <b>{direction}</b> (<code>{conf:.0%}</code> ML probability)\n",
         "🛡️ <b>Market Context</b>",
         f"• Regime: {a['market_regime']} (ADX: <code>{a['adx']:.1f}</code>)",
-        f"• Volatility: {a['vol_regime'].title()} (ATR: <code>{a['atr']:.2f}</code>)",
-        f"• Momentum: RSI <code>{a['rsi']:.1f}</code> | MACD <code>{a['macd_hist']:+.5f}</code>"
+        f"• Volatility: ATR <code>{a['atr']:.2f}</code>",
+        f"• Momentum: RSI <code>{a['rsi']:.1f}</code>"
     ]
     
     if bt:
@@ -307,3 +273,4 @@ def format_report(a: dict, bt: dict | None = None) -> str:
             
     lines.append("\n<i>Not financial advice. This index is RNG-generated.</i>")
     return "\n".join(lines)
+    
