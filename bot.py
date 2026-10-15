@@ -5,11 +5,19 @@ import time
 
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-
-import analysis
+from telegram.ext import (
+    Application, 
+    CommandHandler, 
+    CallbackQueryHandler, 
+    ContextTypes,
+    MessageHandler,
+    filters
+)
 
 load_dotenv()
+import analysis
+import lang  # The LLM layer
+
 logging.basicConfig(level=logging.INFO)
 
 _cache = {"t": 0.0, "df": None}
@@ -155,6 +163,30 @@ async def unsubscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         j.schedule_removal()
     await update.message.reply_text("🛑 Unsubscribed." if jobs else "No active subscription found.")
 
+# --- Conversational LLM Layer ---
+async def chat_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Fallback handler for natural language chatting using Gemini."""
+    user_text = update.message.text
+    chat_id = update.effective_chat.id
+    
+    # Show a typing indicator to the user while Gemini thinks
+    await ctx.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+    
+    # Try to grab the latest cached data so the LLM knows current market conditions
+    current_data = {}
+    if _cache["df"] is not None:
+        try:
+            current_data = await asyncio.to_thread(analysis.analyse, _cache["df"])
+        except Exception:
+            pass # Failsafe if the cache is empty or invalid
+            
+    try:
+        reply = await lang.chat_with_data(user_text, current_data)
+        # Parse mode is HTML to render Gemini's formatting
+        await update.message.reply_text(reply, parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ AI connection error: {e}")
+
 def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     render_url = "https://fx-derivbot.onrender.com"
@@ -170,6 +202,9 @@ def main():
     
     # Catch button clicks
     app.add_handler(CallbackQueryHandler(handle_button))
+    
+    # Catch standard text and pass it to Gemini
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
         
     port = int(os.environ.get("PORT", 10000))
     app.run_webhook(
