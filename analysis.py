@@ -15,7 +15,7 @@ from sklearn.preprocessing import StandardScaler
 
 WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public"
 SYMBOL = "1HZ100V"
-HORIZON = 2
+HORIZON = 5
 
 
 # ---------------------------------------------------------------- data feed
@@ -170,7 +170,7 @@ def walk_forward(df: pd.DataFrame, n_splits: int = 5) -> dict:
 
 
 # --------------------------------------------------------------- prediction
-def analyse(df: pd.DataFrame) -> dict:
+def analyse(df: pd.DataFrame, tf_label: str = "15-Min") -> dict:
     X, y, X_all = _dataset(df)
     model = _model().fit(X, y)
     
@@ -220,6 +220,7 @@ def analyse(df: pd.DataFrame) -> dict:
     return {
         "symbol": SYMBOL,
         "asset_name": "Volatility 100 (1s) Index",
+        "timeframe": tf_label,
         "price": float(df["close"].iloc[-1]),
         "p_up": p_up,
         "confluence_dir": confluence_dir,
@@ -249,7 +250,7 @@ def format_report(a: dict, bt: dict | None = None) -> str:
         rej_text = "No major structural rejection"
         
     lines = [
-        f"<b>{header_icon} V100 (1s) | Outlook: {a['confluence_dir']}</b>",
+        f"<b>{header_icon} V100 (1s) | {a.get('timeframe', '15-Min')} Outlook: {a['confluence_dir']}</b>",
         f"Price: <code>{a['price']:.2f}</code>\n",
         f"🎯 <b>Setup Quality:</b> {a['confluence_grade']} PROBABILITY (Grade {a['confluence_score']}/7+)",
         f"• Fast Cross: 9/26 EMA {'Bullish' if a['ema_trend'] == 'up' else 'Bearish'}",
