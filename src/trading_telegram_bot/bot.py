@@ -15,8 +15,8 @@ from telegram.ext import (
 )
 
 load_dotenv()
-import analysis
-import lang  # The LLM layer
+from . import analysis
+from . import lang  # The LLM layer
 
 logging.basicConfig(level=logging.INFO)
 

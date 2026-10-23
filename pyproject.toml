@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-trading-telegram-bot = "trading_telegram_bot:main"
+bot = "trading_telegram_bot.bot:main"
 
 [build-system]
 requires = ["uv_build>=0.13.4,<0.14.0"]
