@@ -1,0 +1,28 @@
+# Secrets & Credentials
+.env
+*.env
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Python Caches & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Tooling Caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+
+# Build Artifacts
+build/
+dist/
+*.egg-info/
+
+# OS Generated Files
+.DS_Store
+Thumbs.db

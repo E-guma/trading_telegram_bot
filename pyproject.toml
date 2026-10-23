@@ -1,0 +1,26 @@
+[project]
+name = "trading_telegram_bot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Elijah", email = "innocentelijahguma@gmail.com" }
+]
+requires-python = ">=3.13.5"
+dependencies = [
+    "google-genai>=2.32.0",
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "pandas-ta>=0.4.71b0",
+    "python-dotenv>=1.0",
+    "python-telegram-bot[job-queue,webhooks]>=21.0",
+    "scikit-learn>=1.4",
+    "websockets>=12.0",
+]
+
+[project.scripts]
+trading-telegram-bot = "trading_telegram_bot:main"
+
+[build-system]
+requires = ["uv_build>=0.13.4,<0.14.0"]
+build-backend = "uv_build"
